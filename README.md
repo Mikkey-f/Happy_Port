@@ -999,8 +999,8 @@ public class JsonExporter implements ResultExporter {
 **开发语言**: Java SE 8+  
 **许可证**: MIT License  
 
-**联系方式**: [1647228132@qq.com]  
-**项目地址**: [GitHub 地址]
+**联系方式**: 1647228132@qq.com  
+**项目地址**: https://github.com/Mikkey-f/Happy_Port
 
 ---
 
