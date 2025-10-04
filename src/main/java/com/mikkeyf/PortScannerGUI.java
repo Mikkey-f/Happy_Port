@@ -19,16 +19,12 @@ public class PortScannerGUI extends JFrame {
     private JTextField threadsField;
     private JButton scanButton;
     private JButton cancelButton;
-    private JButton clearButton;
-    private JButton saveButton;
     private JProgressBar progressBar;
     private JLabel statusLabel;
     private JTextArea logArea;
-    private JTable resultTable;
     private DefaultTableModel tableModel;
 
     private PortScanner currentScanner;
-    private Thread scanThread;
 
     public PortScannerGUI() {
         initializeUI();
@@ -131,12 +127,12 @@ public class PortScannerGUI extends JFrame {
         panel.add(cancelButton);
 
         // 清空结果按钮
-        clearButton = new JButton("清空结果");
+        JButton clearButton = new JButton("清空结果");
         clearButton.addActionListener(e -> clearResults());
         panel.add(clearButton);
 
         // 保存结果按钮
-        saveButton = new JButton("保存结果");
+        JButton saveButton = new JButton("保存结果");
         saveButton.addActionListener(e -> saveResults());
         panel.add(saveButton);
 
@@ -194,7 +190,7 @@ public class PortScannerGUI extends JFrame {
             }
         };
 
-        resultTable = new JTable(tableModel);
+        JTable resultTable = new JTable(tableModel);
         resultTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         resultTable.getColumnModel().getColumn(0).setPreferredWidth(80);
         resultTable.getColumnModel().getColumn(1).setPreferredWidth(300);
@@ -311,7 +307,7 @@ public class PortScannerGUI extends JFrame {
                     scanButton.setEnabled(true);
                     cancelButton.setEnabled(false);
 
-                    if (openPorts.size() > 0) {
+                    if (!openPorts.isEmpty()) {
                         int result = JOptionPane.showConfirmDialog(
                                 PortScannerGUI.this,
                                 "扫描完成！是否保存结果到文件？",
@@ -336,7 +332,7 @@ public class PortScannerGUI extends JFrame {
         });
 
         // 在新线程中执行扫描
-        scanThread = new Thread(() -> {
+        Thread scanThread = new Thread(() -> {
             try {
                 currentScanner.scanPorts();
             } catch (Exception e) {

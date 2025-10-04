@@ -10,7 +10,7 @@ import java.util.concurrent.*;
 public class PortScanner {
 
     // 常见的端口及其作用（中文说明）
-    private static final Map<Integer, String> COMMON_PORTS = new HashMap<Integer, String>() {{
+    private static final Map<Integer, String> COMMON_PORTS = new HashMap<>() {{
         put(21, "FTP（文件传输协议）");
         put(22, "SSH（安全外壳协议）");
         put(23, "Telnet（远程登录协议）");
@@ -25,10 +25,10 @@ public class PortScanner {
         put(8080, "HTTP-Alt（备用HTTP端口）");
     }};
 
-    private String host;
-    private int startPort;
-    private int endPort;
-    private int maxThreads;
+    private final String host;
+    private final int startPort;
+    private final int endPort;
+    private final int maxThreads;
     private volatile boolean isCancelled = false;
 
     // 回调接口，用于更新进度和结果
@@ -45,8 +45,8 @@ public class PortScanner {
      * 端口扫描结果类
      */
     public static class PortResult {
-        private int port;
-        private String service;
+        private final int port;
+        private final String service;
 
         public PortResult(int port, String service) {
             this.port = port;
@@ -86,9 +86,7 @@ public class PortScanner {
      * 扫描单个端口
      */
     private PortResult scanPort(String host, int port) {
-        Socket socket = null;
-        try {
-            socket = new Socket();
+        try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, port), 500); // 500ms 超时
 
             // 获取端口服务名称
@@ -97,15 +95,8 @@ public class PortScanner {
 
         } catch (IOException e) {
             return null; // 端口关闭
-        } finally {
-            if (socket != null) {
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    // 忽略关闭异常
-                }
-            }
         }
+        // 忽略关闭异常
     }
 
     /**
@@ -143,7 +134,7 @@ public class PortScanner {
     /**
      * 多线程扫描端口
      */
-    public List<PortResult> scanPorts() {
+    public void scanPorts() {
         List<PortResult> openPorts = Collections.synchronizedList(new ArrayList<>());
         int totalPorts = endPort - startPort + 1;
 
@@ -215,7 +206,6 @@ public class PortScanner {
             callback.onComplete(openPorts);
         }
 
-        return openPorts;
     }
 
     /**
