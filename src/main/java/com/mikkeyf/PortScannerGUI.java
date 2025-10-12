@@ -17,6 +17,7 @@ public class PortScannerGUI extends JFrame {
     private JTextField startPortField;
     private JTextField endPortField;
     private JTextField threadsField;
+    private JComboBox<PortScanner.Protocol> protocolComboBox;
     private JButton scanButton;
     private JButton cancelButton;
     private JProgressBar progressBar;
@@ -101,8 +102,17 @@ public class PortScannerGUI extends JFrame {
         threadsField = new JTextField("10", 8);
         panel.add(threadsField, gbc);
 
+        // 协议类型
+        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
+        panel.add(new JLabel("扫描协议:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 0.3;
+        protocolComboBox = new JComboBox<>(PortScanner.Protocol.values());
+        protocolComboBox.setSelectedItem(PortScanner.Protocol.TCP);
+        protocolComboBox.setToolTipText("UDP扫描结果不可靠，仅供参考");
+        panel.add(protocolComboBox, gbc);
+
         // 按钮面板
-        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 4;
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 4;
         panel.add(createButtonPanel(), gbc);
 
         return panel;
@@ -182,7 +192,7 @@ public class PortScannerGUI extends JFrame {
         panel.setBorder(BorderFactory.createTitledBorder("扫描结果"));
 
         // 创建表格
-        String[] columnNames = {"端口号", "服务名称", "状态"};
+        String[] columnNames = {"端口号", "协议", "服务名称", "状态"};
         tableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -193,8 +203,9 @@ public class PortScannerGUI extends JFrame {
         JTable resultTable = new JTable(tableModel);
         resultTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         resultTable.getColumnModel().getColumn(0).setPreferredWidth(80);
-        resultTable.getColumnModel().getColumn(1).setPreferredWidth(300);
-        resultTable.getColumnModel().getColumn(2).setPreferredWidth(80);
+        resultTable.getColumnModel().getColumn(1).setPreferredWidth(60);
+        resultTable.getColumnModel().getColumn(2).setPreferredWidth(250);
+        resultTable.getColumnModel().getColumn(3).setPreferredWidth(100);
 
         JScrollPane scrollPane = new JScrollPane(resultTable);
         panel.add(scrollPane, BorderLayout.CENTER);
@@ -262,17 +273,25 @@ public class PortScannerGUI extends JFrame {
         scanButton.setEnabled(false);
         cancelButton.setEnabled(true);
 
+        // 获取协议选择
+        PortScanner.Protocol protocol = (PortScanner.Protocol) protocolComboBox.getSelectedItem();
+
         // 记录开始时间
         String startTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
         appendLog("========================================");
         appendLog("扫描开始时间: " + startTime);
         appendLog("目标主机: " + host);
         appendLog("端口范围: " + startPort + " - " + endPort);
+        appendLog("扫描协议: " + protocol.getDisplayName());
         appendLog("线程数: " + threads);
+        if (protocol == PortScanner.Protocol.UDP || protocol == PortScanner.Protocol.BOTH) {
+            appendLog("注意：UDP扫描结果不可靠，仅供参考");
+        }
         appendLog("========================================\n");
 
         // 创建扫描器
         currentScanner = new PortScanner(host, startPort, endPort, threads);
+        currentScanner.setProtocol(protocol);
         currentScanner.setCallback(new PortScanner.ScanCallback() {
             @Override
             public void onProgress(int currentPort, double percentage) {
@@ -284,9 +303,25 @@ public class PortScannerGUI extends JFrame {
 
             @Override
             public void onPortFound(int port, String service) {
+                // 保留兼容性，实际使用onPortFoundDetailed
+            }
+
+            @Override
+            public void onPortFoundDetailed(PortScanner.PortResult result) {
                 SwingUtilities.invokeLater(() -> {
-                    appendLog("✓ 端口 " + port + " 已打开 - " + service);
-                    tableModel.addRow(new Object[]{port, service, "开放"});
+                    String logMessage = String.format("✓ 端口 %d (%s) %s - %s", 
+                        result.getPort(), 
+                        result.getProtocol().getDisplayName(),
+                        result.getState(),
+                        result.getService());
+                    appendLog(logMessage);
+                    
+                    tableModel.addRow(new Object[]{
+                        result.getPort(), 
+                        result.getProtocol().getDisplayName(),
+                        result.getService(), 
+                        result.getState()
+                    });
                 });
             }
 
@@ -412,8 +447,10 @@ public class PortScannerGUI extends JFrame {
 
                 for (int i = 0; i < tableModel.getRowCount(); i++) {
                     int port = (int) tableModel.getValueAt(i, 0);
-                    String service = (String) tableModel.getValueAt(i, 1);
-                    writer.write("端口 " + port + " 已打开 - " + service + "\n");
+                    String protocolStr = (String) tableModel.getValueAt(i, 1);
+                    String service = (String) tableModel.getValueAt(i, 2);
+                    String state = (String) tableModel.getValueAt(i, 3);
+                    writer.write(String.format("端口 %d (%s) %s - %s\n", port, protocolStr, state, service));
                 }
 
                 writer.close();
@@ -441,6 +478,7 @@ public class PortScannerGUI extends JFrame {
         startPortField.setEnabled(enabled);
         endPortField.setEnabled(enabled);
         threadsField.setEnabled(enabled);
+        protocolComboBox.setEnabled(enabled);
     }
 
     /**

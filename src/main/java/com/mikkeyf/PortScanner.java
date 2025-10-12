@@ -9,6 +9,49 @@ import java.util.concurrent.*;
  */
 public class PortScanner {
 
+    /**
+     * 扫描协议类型
+     */
+    public enum Protocol {
+        TCP("TCP"),
+        UDP("UDP"),
+        BOTH("TCP+UDP");
+
+        private final String displayName;
+
+        Protocol(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+
+        @Override
+        public String toString() {
+            return displayName;
+        }
+    }
+
+    /**
+     * UDP端口状态
+     */
+    public enum UdpPortState {
+        OPEN("开放"),
+        CLOSED("关闭"),
+        OPEN_OR_FILTERED("开放|过滤");
+
+        private final String displayName;
+
+        UdpPortState(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+    }
+
     // 常见的端口及其作用（中文说明）
     private static final Map<Integer, String> COMMON_PORTS = new HashMap<>() {{
         put(21, "FTP（文件传输协议）");
@@ -29,6 +72,7 @@ public class PortScanner {
     private final int startPort;
     private final int endPort;
     private final int maxThreads;
+    private Protocol protocol = Protocol.TCP; // 默认TCP扫描
     private volatile boolean isCancelled = false;
 
     // 回调接口，用于更新进度和结果
@@ -36,7 +80,8 @@ public class PortScanner {
 
     public interface ScanCallback {
         void onProgress(int currentPort, double percentage);
-        void onPortFound(int port, String service);
+        void onPortFound(int port, String service); // 已弃用，保留兼容性
+        void onPortFoundDetailed(PortResult result); // 新方法，传递完整结果
         void onComplete(List<PortResult> openPorts);
         void onError(String error);
     }
@@ -47,10 +92,19 @@ public class PortScanner {
     public static class PortResult {
         private final int port;
         private final String service;
+        private final Protocol protocol;
+        private final String state; // 状态描述（TCP: "开放", UDP: "开放", "关闭", "开放|过滤"）
 
-        public PortResult(int port, String service) {
+        public PortResult(int port, String service, Protocol protocol, String state) {
             this.port = port;
             this.service = service;
+            this.protocol = protocol;
+            this.state = state;
+        }
+
+        // 兼容旧代码的构造函数
+        public PortResult(int port, String service) {
+            this(port, service, Protocol.TCP, "开放");
         }
 
         public int getPort() {
@@ -61,9 +115,17 @@ public class PortScanner {
             return service;
         }
 
+        public Protocol getProtocol() {
+            return protocol;
+        }
+
+        public String getState() {
+            return state;
+        }
+
         @Override
         public String toString() {
-            return "端口 " + port + ": " + service;
+            return String.format("端口 %d (%s): %s - %s", port, protocol.getDisplayName(), service, state);
         }
     }
 
@@ -78,25 +140,119 @@ public class PortScanner {
         this.callback = callback;
     }
 
+    public void setProtocol(Protocol protocol) {
+        this.protocol = protocol;
+    }
+
     public void cancel() {
         this.isCancelled = true;
     }
 
     /**
-     * 扫描单个端口
+     * 扫描单个TCP端口
      */
-    private PortResult scanPort(String host, int port) {
+    private PortResult scanTcpPort(String host, int port) {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, port), 500); // 500ms 超时
 
             // 获取端口服务名称
             String service = getServiceName(port);
-            return new PortResult(port, service);
+            return new PortResult(port, service, Protocol.TCP, "开放");
 
         } catch (IOException e) {
             return null; // 端口关闭
         }
-        // 忽略关闭异常
+    }
+
+    /**
+     * 扫描单个UDP端口
+     * 注意：UDP扫描本质上不可靠，结果仅供参考
+     */
+    private PortResult scanUdpPort(String host, int port) {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.setSoTimeout(1000); // 1秒超时
+
+            InetAddress address = InetAddress.getByName(host);
+            
+            // 准备UDP数据包
+            byte[] sendData = getUdpProbeData(port);
+            DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, port);
+            
+            // 发送数据包
+            socket.send(sendPacket);
+            
+            // 尝试接收响应
+            byte[] receiveData = new byte[1024];
+            DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
+            
+            try {
+                socket.receive(receivePacket);
+                // 收到响应，端口可能开放
+                String service = getServiceName(port);
+                return new PortResult(port, service, Protocol.UDP, "开放");
+                
+            } catch (SocketTimeoutException e) {
+                // 超时无响应，可能开放或被过滤
+                String service = getServiceName(port);
+                return new PortResult(port, service, Protocol.UDP, "开放|过滤");
+            }
+            
+        } catch (PortUnreachableException e) {
+            // 收到ICMP端口不可达，端口关闭
+            return null;
+            
+        } catch (IOException e) {
+            // 其他IO异常，可能是网络问题
+            return null;
+        }
+    }
+
+    /**
+     * 根据端口生成特定的UDP探测数据
+     * 针对常见服务发送协议特定的探测包
+     */
+    private byte[] getUdpProbeData(int port) {
+        switch (port) {
+            case 53: // DNS
+                // DNS查询包（查询 example.com 的 A 记录）
+                return new byte[]{
+                    0x00, 0x1e, // Transaction ID
+                    0x01, 0x00, // Flags: standard query
+                    0x00, 0x01, // Questions: 1
+                    0x00, 0x00, // Answer RRs: 0
+                    0x00, 0x00, // Authority RRs: 0
+                    0x00, 0x00, // Additional RRs: 0
+                    0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+                    0x03, 'c', 'o', 'm',
+                    0x00, // End of name
+                    0x00, 0x01, // Type: A
+                    0x00, 0x01  // Class: IN
+                };
+                
+            case 123: // NTP
+                // NTP请求包
+                return new byte[]{
+                    0x1b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                };
+                
+            case 161: // SNMP
+                // SNMP GetRequest包（简化版）
+                return new byte[]{
+                    0x30, 0x26, 0x02, 0x01, 0x00, 0x04, 0x06, 'p', 'u', 'b', 'l', 'i', 'c',
+                    (byte) 0xa0, 0x19, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00,
+                    0x30, 0x0e, 0x30, 0x0c, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00,
+                    0x05, 0x00
+                };
+                
+            default:
+                // 默认发送空数据包
+                return new byte[0];
+        }
     }
 
     /**
@@ -136,48 +292,61 @@ public class PortScanner {
      */
     public void scanPorts() {
         List<PortResult> openPorts = Collections.synchronizedList(new ArrayList<>());
-        int totalPorts = endPort - startPort + 1;
+        
+        // 根据协议类型计算总端口数
+        int portsPerProtocol = endPort - startPort + 1;
+        int totalPorts = protocol == Protocol.BOTH ? portsPerProtocol * 2 : portsPerProtocol;
 
         ExecutorService executor = Executors.newFixedThreadPool(maxThreads);
-        Map<Future<PortResult>, Integer> futures = new ConcurrentHashMap<>();
+        List<Future<PortResult>> futures = new ArrayList<>();
 
         try {
-            // 提交所有扫描任务
-            for (int port = startPort; port <= endPort; port++) {
-                if (isCancelled) {
-                    break;
+            // 根据协议类型提交扫描任务
+            if (protocol == Protocol.TCP || protocol == Protocol.BOTH) {
+                // TCP扫描
+                for (int port = startPort; port <= endPort; port++) {
+                    if (isCancelled) break;
+                    final int currentPort = port;
+                    futures.add(executor.submit(() -> scanTcpPort(host, currentPort)));
                 }
-                final int currentPort = port;
-                Future<PortResult> future = executor.submit(() -> scanPort(host, currentPort));
-                futures.put(future, currentPort);
+            }
+            
+            if (protocol == Protocol.UDP || protocol == Protocol.BOTH) {
+                // UDP扫描
+                for (int port = startPort; port <= endPort; port++) {
+                    if (isCancelled) break;
+                    final int currentPort = port;
+                    futures.add(executor.submit(() -> scanUdpPort(host, currentPort)));
+                }
             }
 
             // 处理完成的任务
             int scannedPorts = 0;
-            for (Map.Entry<Future<PortResult>, Integer> entry : futures.entrySet()) {
+            for (Future<PortResult> future : futures) {
                 if (isCancelled) {
                     break;
                 }
 
                 try {
-                    Future<PortResult> future = entry.getKey();
-                    Integer port = entry.getValue();
-
                     PortResult result = future.get(); // 阻塞等待结果
                     scannedPorts++;
 
                     double progress = (scannedPorts * 100.0) / totalPorts;
 
-                    // 回调更新进度
-                    if (callback != null) {
-                        callback.onProgress(port, progress);
-                    }
-
-                    // 如果端口开放
+                    // 如果端口开放或有结果
                     if (result != null) {
                         openPorts.add(result);
+                        
+                        // 回调更新进度
                         if (callback != null) {
-                            callback.onPortFound(result.getPort(), result.getService());
+                            callback.onProgress(result.getPort(), progress);
+                            callback.onPortFound(result.getPort(), result.getService()); // 兼容旧版本
+                            callback.onPortFoundDetailed(result); // 新版本，传递完整信息
+                        }
+                    } else {
+                        // 端口关闭，只更新进度
+                        if (callback != null) {
+                            callback.onProgress(0, progress);
                         }
                     }
 
@@ -290,6 +459,15 @@ public class PortScanner {
             @Override
             public void onPortFound(int port, String service) {
                 System.out.println("\n端口 " + port + " 已打开 - " + service);
+            }
+
+            @Override
+            public void onPortFoundDetailed(PortResult result) {
+                System.out.printf("\n端口 %d (%s) %s - %s\n", 
+                    result.getPort(), 
+                    result.getProtocol().getDisplayName(),
+                    result.getState(),
+                    result.getService());
             }
 
             @Override
