@@ -282,7 +282,9 @@ public class PortScannerGUI extends JFrame {
         appendLog("扫描开始时间: " + startTime);
         appendLog("目标主机: " + host);
         appendLog("端口范围: " + startPort + " - " + endPort);
-        appendLog("扫描协议: " + protocol.getDisplayName());
+        if (protocol != null) {
+            appendLog("扫描协议: " + protocol.getDisplayName());
+        }
         appendLog("线程数: " + threads);
         if (protocol == PortScanner.Protocol.UDP || protocol == PortScanner.Protocol.BOTH) {
             appendLog("注意：UDP扫描结果不可靠，仅供参考");
